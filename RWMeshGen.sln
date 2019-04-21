@@ -9,11 +9,11 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "libMeshGen", "libMeshGen\li
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RWMeshGen", "RWMeshGen\RWMeshGen.csproj", "{DB310A48-AB74-4B13-805D-2718E0992DD5}"
 EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "MatrixInterface", "MatrixInterface\MatrixInterface.vcproj", "{2575352C-7277-4BF1-8FB4-CF2680843BBF}"
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "MatrixInterface", "MatrixInterface\MatrixInterface.vcxproj", "{2575352C-7277-4BF1-8FB4-CF2680843BBF}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TomoKisStudioXml", "TomoKisStudioXml\TomoKisStudioXml.csproj", "{C8F46A52-B070-4826-B297-05BA9F3D12E3}"
 EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "NativeException.unicode", "NativeExceptions\NativeExceptions.unicode.vcproj", "{86979332-D3D0-4025-B464-28A464AAF989}"
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "NativeException.unicode", "NativeExceptions\NativeExceptions.unicode.vcxproj", "{86979332-D3D0-4025-B464-28A464AAF989}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -114,11 +114,11 @@ Global
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
-		BuildVersion_StartDate = 2009/10/1
-		BuildVersion_BuildVersioningStyle = None.None.Increment.None
-		BuildVersion_ConfigurationName = Any
-		BuildVersion_UpdateFileVersion = True
-		BuildVersion_UpdateAssemblyVersion = True
 		SolutionGuid = {A9DF356C-1869-4577-8E87-8BCA8B38F446}
+		BuildVersion_UpdateAssemblyVersion = True
+		BuildVersion_UpdateFileVersion = True
+		BuildVersion_ConfigurationName = Any
+		BuildVersion_BuildVersioningStyle = None.None.Increment.None
+		BuildVersion_StartDate = 2009/10/1
 	EndGlobalSection
 EndGlobal
