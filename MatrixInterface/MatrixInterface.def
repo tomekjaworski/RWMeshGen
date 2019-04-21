@@ -1,0 +1,6 @@
+; MatrixInterface.def : Declares the module parameters for the DLL.
+
+LIBRARY      "MatrixInterface"
+
+EXPORTS
+    ; Explicit exports can go here

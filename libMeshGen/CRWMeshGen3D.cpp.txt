@@ -1,0 +1,749 @@
+// libMeshGen.cpp : Defines the exported functions for the DLL application.
+//
+
+#include "stdafx.h"
+#include "libMeshGen.h"
+
+CRWMeshGen3D::CRWMeshGen3D()
+{
+	this->shield_active = false;
+	this->inner_active = false;
+
+	this->shield_distance = 0;
+	this->outer_distance = 0;
+	this->inner_distance = 0;
+	this->height = 0;
+
+	this->vertical_density = 0;
+	this->horizontal_density = 0;
+	this->shield_density = 0;
+}
+
+CRWMeshGen3D::~CRWMeshGen3D()
+{
+}
+
+double CRWMeshGen3D::GetRadius(void) const
+{
+	if (this->shield_active)
+		return shield_distance;
+	return this->outer_distance;
+}
+
+double CRWMeshGen3D::GetMaxRadius(void) const
+{
+	return max(this->shield_distance, max(this->inner_distance, this->outer_distance));
+}
+
+void CRWMeshGen3D::SetDensity(const double horizontal, const double shield)
+{
+	this->horizontal_density = horizontal;
+	this->shield_density = shield;
+}
+
+
+void CRWMeshGen3D::SetHeight(const double height, const double vertical_density)
+{
+	this->height = height;
+	this->vertical_density = vertical_density;
+}
+
+
+void CRWMeshGen3D::SetShieldDistance(const double distance, const bool shield_active)
+{
+	this->shield_active = shield_active;
+	this->shield_distance = distance;
+}
+
+void CRWMeshGen3D::SetInnerWallDistance(const double distance, const bool inner_active)
+{
+	this->inner_active = inner_active;
+	this->inner_distance = distance;
+}
+
+void CRWMeshGen3D::SetOuterWallDistance(const double distance)
+{
+	this->outer_distance = distance;
+}
+
+
+int CRWMeshGen3D::GetNumberOfRings(void) const
+{
+	return this->nodes.size() - 1;
+}
+
+int CRWMeshGen3D::GetNumberOfPlainElements(void) const
+{
+	return this->plain_elements.size();
+}
+
+int CRWMeshGen3D::GetNumberOfSpatialElements(void) const
+{
+	return this->spatial_elements.size();
+}
+
+int CRWMeshGen3D::GetNumberOfPlainNodes(void) const
+{
+	return this->plain_nodes.size();
+}
+
+int CRWMeshGen3D::GetNumberOfSpatialNodes(void) const
+{
+	return this->spatial_nodes.size();
+}
+
+int CRWMeshGen3D::GetNumberOfNodesOnRing(int ring_no) const
+{
+	return this->nodes[ring_no].size();
+}
+
+CNode * CRWMeshGen3D::GetFirstPlainNode(void)
+{
+	if (this->plain_nodes.empty())
+		return NULL;
+	return &this->plain_nodes[0];
+}
+
+CNode * CRWMeshGen3D::GetFirstSpatialNode(void)
+{
+	if (this->spatial_nodes.empty())
+		return NULL;
+	return &this->spatial_nodes[0];
+}
+
+CRing * CRWMeshGen3D::GetFirstRing(void)
+{
+	if (this->rings.empty())
+		return NULL;
+	return &this->rings[0];
+}
+
+CElement2D * CRWMeshGen3D::GetFirstPlainElement(void)
+{
+	if (this->plain_elements.empty())
+		return NULL;
+	return &this->plain_elements[0];
+}
+
+CElement3D * CRWMeshGen3D::GetFirstSpatialElement(void)
+{
+	if (this->spatial_elements.empty())
+		return NULL;
+	return &this->spatial_elements[0];
+}
+
+void RescaleRadiuses(CRing * near_ring, CRing * far_ring)
+{
+	int nrings = (far_ring - near_ring);
+	double delta = (far_ring->radius - near_ring->radius) / (double)nrings;
+	for (int i = 0; i < nrings; i++)
+		near_ring[i + 1].SetRadius(near_ring->radius + delta * (double)(i + 1));
+}
+
+
+void CRWMeshGen3D::Generate(void)
+{
+	if (this->horizontal_density <= 0.0)
+		throw NativeExceptions::CRangeException(_T("Horizontal density can not be equal to or less than 0"));
+	if ((this->shield_active) && (this->shield_distance <= this->outer_distance))
+		throw NativeExceptions::CRangeException(_T("Shield's ring distance is less than electrodes' ring distance"), 0.0);
+	if ((this->inner_active) && (this->inner_distance >= this->outer_distance))
+		throw NativeExceptions::CRangeException(_T("Inner wall distance should be less than electrodes' ring distance"), 0.0);
+
+	double current_radius = 0;
+	this->rings.push_back(CRing(0.0, 0.0, true));
+
+	// od zera do œciany wewnêtrznej INNER WALL
+	// rozk³ad liniowy
+
+	if (this->inner_active)
+	{
+		int number_of_rings = ceil((this->inner_distance - current_radius) / this->horizontal_density);
+		for (int i = 1; i < number_of_rings; i++)
+		{
+			double rad = current_radius + ((this->inner_distance - current_radius) / (double)number_of_rings) * (double)i;
+			this->rings.push_back(CRing(rad, this->horizontal_density));
+		}
+
+		current_radius = this->inner_distance;
+		this->rings.push_back(CRing(this->inner_distance, this->horizontal_density, true));
+	}
+
+	// od zera do œciany zewnêtrznej OUTER WALL lub od sciany wewnetrznej INNER WALL do sciany zewnetrznej OUTER WALL
+	// rozk³ad liniowy
+	{
+		int number_of_rings = ceil((this->outer_distance - current_radius) / this->horizontal_density);
+		for (int i = 1; i < number_of_rings; i++)
+		{
+			double rad = current_radius + ((this->outer_distance - current_radius) / (double)number_of_rings) * (double)i;
+			this->rings.push_back(CRing(rad, this->horizontal_density));
+		}
+		current_radius = this->outer_distance;
+		this->rings.push_back(CRing(this->outer_distance, this->horizontal_density, true));
+	}
+
+	// od sciany zewnetrznej OUTER WALL to ekranu SHIELD
+	// rozk³ad wyk³adniczy
+	if (this->shield_active)
+	{
+		if (this->meshing_mode == MeshingMode_Normal)
+			current_radius = this->ShieldMesh_Normal(current_radius);
+		if (this->meshing_mode == MeshingMode_Linear_Rconst_Dvar)
+			current_radius = this->ShieldMesh_LIN_Rconst_Dvar(current_radius);
+		if (this->meshing_mode == MeshingMode_Linear_Rvar_Dvar)
+			current_radius = ShieldMesh_LIN_Rvar_Dvar(current_radius);
+		if (this->meshing_mode == MeshingMode_Exponential_Rconst_Dvar)
+			current_radius = ShieldMesh_EXP_Rconst_Dvar(current_radius);
+		if (this->meshing_mode == MeshingMode_Exponential_Rvar_Dvar)
+			current_radius = ShieldMesh_EXP_Rvar_Dvar(current_radius);
+	}
+
+	this->nodes.resize(this->rings.size());
+		// else
+		//{
+		
+			/*
+			// expotential meshing - different distances between rings
+			double relative_radius = this->horizontal_density;
+			double corrected_shield_density;
+			double bias = this->horizontal_density;
+			while(true)
+			{
+				double radius_delta = this->linear_coefficient * pow(relative_radius, 2.0) + this->horizontal_density;
+
+				if (current_radius + relative_radius + radius_delta  - bias> this->shield_distance)
+					break;
+
+				this->rings.push_back(CRing(current_radius + relative_radius + radius_delta - bias, radius_delta, false));
+				corrected_shield_density = radius_delta;
+				relative_radius += radius_delta;
+			}
+
+			current_radius = this->shield_distance;
+			this->rings.push_back(CRing(this->shield_distance, corrected_shield_density, true));
+			*/
+
+
+
+
+
+
+			/*
+			double radius_delta = 0.0;
+			double current_density = this->horizontal_density;
+			double density_delta;
+			while(true)
+			{
+				density_delta = this->horizontal_density * this->linear_coefficient;
+				double new_radius = current_radius + radius_delta + current_density + density_delta;
+				if (new_radius >= this->shield_distance)
+					break;
+
+				this->rings.push_back(CRing(new_radius, current_density + density_delta));
+				current_density += density_delta;
+				radius_delta += current_density;
+			}
+
+			// wyznaczenie gêstoœci punktó na pierœcieniu ekranu zewnêtrznego
+			double current_ring_dist = current_radius + radius_delta;
+			double next_ring_dist = current_radius + radius_delta + current_density;
+			double shield_dist = this->shield_distance;
+			/*
+			 next_ring_dist                                                   center of mesh's base
+			 |<----------------------------------------------------------------------x
+												   current_ring_dist
+												   |<--------------------------------x
+									shield_dist
+									|<-----------------------------------------------x
+			 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+			 BBBBBBBBBBBBBBBBBBBBBBBB
+
+			 corrected_shield_density = current_density(on current_ring_dist) x new ring's density x B/A
+			*/
+/*
+			next_ring_dist -= current_ring_dist;
+			shield_dist -= current_ring_dist;
+			double corrected_shield_density = current_density + density_delta * shield_dist / next_ring_dist;
+
+			current_radius = this->shield_distance;
+			this->rings.push_back(CRing(this->shield_distance, corrected_shield_density, true));
+*/
+
+
+						/*
+			//double shield_density = this->horizontal_density / 2;
+			double start_density = this->horizontal_density / 2;
+			double stop_density = this->shield_density;
+
+			// znajdz koncowa gêstoœæ i iloœæ pierœcieni
+			double a = (stop_density - start_density) / pow(this->shield_distance - current_radius, 2.0);
+			double c = start_density;
+
+			double new_rad = current_radius;
+			int ring_count = 0;
+			bool fake_run = false;
+			double fake_run_bias = 0;
+			while (true)
+			{
+				double new_density = a * pow(start_density + new_rad - current_radius, 2.0) + c;
+				//double mid_point = (new_rad + (new_rad + new_density)) / 2.0;
+				//if (mid_point > this->shield_distance)
+				//	break;
+				if (new_rad + new_density + fake_run_bias>= this->shield_distance)
+					break;
+
+				if (!fake_run)
+				{
+					ring_count++;
+
+					double ring_dist = abs(new_rad + new_density - this->shield_distance);
+					if (ring_dist >= 0.5 * new_density)
+						this->rings.push_back(CRing(new_rad + new_density, new_density));
+					new_rad += new_density;
+				} else
+					fake_run_bias = new_density;
+
+				fake_run = false;
+			}
+			*/
+			//current_radius = this->shield_distance;
+			//this->rings.push_back(CRing(this->shield_distance, stop_density, true));
+
+		//}
+	//}
+
+
+
+
+	//////////////double radius = this->GetRadius();
+	
+	// okreœlenie iloœci pierœcieni
+	//////////////int number_of_rings = ceil(radius / this->horizontal_density);
+	//this->rings.resize(number_of_rings + 1, CRing());
+//////////////	this->nodes.resize(number_of_rings + 1);
+
+	// okreœlenie œrednic poszczególnych pierœcieni wêz³ów
+	////////for (int ring_no = 1; ring_no <= number_of_rings; ring_no++)
+	///{
+	///	double rad = (radius / (double)number_of_rings) * (double)ring_no;
+	////	this->rings[ring_no].SetRadius(rad);
+	/////}
+
+//	CRing * inner_ring = this->GetNearestRing(this->inner_distance);
+	//CRing * outer_ring = this->GetNearestRing(this->outer_distance);
+//	/CRing * shield_ring = this->GetNearestRing(this->shield_distance);
+	//CRing * ring0 = this->GetFirstRing();
+
+//	if (shield_active)
+//	{
+//		if (shield_ring == outer_ring)
+//			throw NativeExceptions::CMeshException("Shield node's ring can not be the same as electrodes' ring");
+//		if (shield_ring == inner_ring)
+//			throw NativeExceptions::CMeshException("Shield node's ring can not be the same as sensor's inner wall's ring");
+//	}
+
+//	if (inner_active)
+//	{
+//		if (inner_ring == shield_ring)
+//			throw NativeExceptions::CMeshException("Sensor's inner wall's ring can not be the same as shield node's ring");
+//		if (inner_ring == outer_ring)
+//			throw NativeExceptions::CMeshException("Sensor's inner wall's ring can not be the same as electrodes' ring");
+//	}
+
+//	outer_ring->radius = this->outer_distance;
+//	outer_ring->fixed = true;
+
+//	if (this->shield_active)
+//	{
+//		shield_ring->radius = this->shield_distance;
+//		shield_ring->fixed = true;
+//		RescaleRadiuses(outer_ring, shield_ring);
+//	}
+//
+//	if (this->inner_active)
+//	{
+//		inner_ring->radius = this->inner_distance;
+//		inner_ring->fixed = true;
+//
+//		// outer -- inner
+//		RescaleRadiuses(inner_ring, outer_ring);
+//
+//		// inner -- ring0
+//		RescaleRadiuses(ring0, inner_ring);
+//	}  else
+//		RescaleRadiuses(ring0, outer_ring);
+
+	// generowanie wêz³ów
+	this->AddNode(0, 0, 0);
+
+	// wêz³y na kolejnych pierœcieniach
+	for (int ring_no = 1; ring_no < this->rings.size(); ring_no++)
+	{
+		double radius = this->rings[ring_no].radius;
+		double density = this->rings[ring_no].density;
+		double len = 2.0 * M_PI * radius;
+
+		int nodes_on_ring = (int)floor(len / density);
+
+		double _2PI = 2.0 * M_PI;
+		for (int inode = 0; inode < nodes_on_ring; inode++)
+		{
+			double angle = _2PI * ((double)inode / (double)nodes_on_ring);
+			this->AddNode(ring_no, radius, angle);
+		}
+	}
+
+	// przesuniêcie wszystkich wêz³ów tak, aby zajmowa³y I æwiartke uk³adu wsp.;
+	double cx = this->GetRadius();
+	double cy = this->GetRadius();
+	for(std::vector<CNode>::iterator iter = this->plain_nodes.begin(); iter != this->plain_nodes.end(); iter++)
+	{
+		iter->x += cx;
+		iter->y += cy;
+	}
+
+
+
+	// ³¹czenie wêz³ów
+	// najpierw po³¹cz wêze³ œrodku
+	//this->elements;
+	int center_node = this->nodes[0][0];
+	for (int inode = 0; inode < this->nodes[1].size(); inode++)
+	{
+		int n1 = this->GetNode(1, inode);
+		int n2 = this->GetNode(1, inode + 1);
+		CElement2D triangle(center_node, n1, n2);
+		this->plain_elements.push_back(triangle); 
+	}
+
+
+	// i ca³a reszta            
+	for (int iring = 1; iring < this->rings.size() - 1; iring++)
+	{
+		int r = 0; // numer wêz³a na pierœcieniu i
+		int r1 = 0; // numer wêz³a na pierœcieniu i+1
+		while ((r < this->nodes[iring].size()) || (r1 < this->nodes[iring + 1].size()))
+		{
+			int n1 = this->GetNode(iring, r);
+			int n2 = this->GetNode(iring + 1, r1);
+
+			int n3a = this->GetNode(iring, r + 1);
+			int n3b = this->GetNode(iring + 1, r1 + 1);
+
+			double d1 = CNode::Distance(&this->plain_nodes[n1], &this->plain_nodes[n3b]);
+			double d2 = CNode::Distance(&this->plain_nodes[n2], &this->plain_nodes[n3a]);
+
+			if (d1 < d2)
+			{
+				CElement2D new_elem(n1, n2, n3b);
+				this->plain_elements.push_back(new_elem);
+				r1++;
+			}
+			else
+			{
+				CElement2D new_elem(n1, n2, n3a);
+				this->plain_elements.push_back(new_elem);
+				r++;
+			}
+		}
+	}
+
+	// generowanie wêz³ów w przestrzeni ze zbioru wêz³ów na p³aszczyŸnie
+	int number_of_levels = (int)floor(this->height / this->vertical_density) + 1;
+	//std::vector<CNode> spatial_nodes;
+	this->spatial_nodes.resize(this->plain_nodes.size() * number_of_levels);
+	std::vector<CNode>::iterator dest_iter  = this->spatial_nodes.begin();
+	for (int i = 0; i < number_of_levels; i++)
+	{
+		float vertical_position = (this->height / (float)(number_of_levels - 1)) * (float)i;
+		std::vector<CNode>::iterator end_iter = this->plain_nodes.end();
+		for(std::vector<CNode>::iterator iter = this->plain_nodes.begin(); iter != end_iter; iter++)
+		{
+			*dest_iter = *iter;
+			CNode * node_ptr = &*dest_iter;
+			node_ptr->z = vertical_position;
+			dest_iter++;
+		}
+	}
+
+	//this->SaveNodes(&node_list, SaveNodesXY, _T("m_nodes_xy.txt"));
+	//this->SaveNodes(&spatial_nodes, SaveNodesXYZ, _T("m_nodes_xyz.txt"));
+	this->SaveNodes(MeshSaveMode::SavePlainData, _T("m_nodes_xy.txt"));
+	this->SaveNodes(MeshSaveMode::SaveSpatialData, _T("m_nodes_xyz.txt"));
+
+
+	//std::vector<CElement3D> spatial_elements;
+	this->spatial_elements.reserve((number_of_levels - 1) * this->plain_elements.size() * 3);
+
+	number_of_levels = (int)floor(this->height / this->vertical_density) + 1;
+	int nodes_per_level = this->GetNumberOfPlainNodes();
+	for (int i = 0; i < number_of_levels - 1; i++)
+	{
+		int current_level_first_node = i * nodes_per_level;
+		int next_level_first_node = (i + 1) * nodes_per_level;
+		std::vector<CElement2D>::iterator end = this->plain_elements.end();
+		for(std::vector<CElement2D>::iterator ie = this->plain_elements.begin(); ie != end; ie++)
+		{
+			int A = current_level_first_node + ie->node1;
+			int B = current_level_first_node + ie->node2;
+			int C = current_level_first_node + ie->node3;
+			int Ap = next_level_first_node + ie->node1;
+			int Bp = next_level_first_node + ie->node2;
+			int Cp = next_level_first_node + ie->node3;
+
+			this->spatial_elements.push_back(CElement3D(A, Ap, Bp, Cp));
+			this->spatial_elements.push_back(CElement3D(A, B, Bp, Cp));
+			this->spatial_elements.push_back(CElement3D(A, B, C, Cp));
+		}
+
+	}
+
+
+
+	this->SaveSimplexes(&spatial_elements, _T("m_simples.txt"));
+	this->SaveTriangles(&plain_elements, _T("m_triangles.txt"));
+
+
+
+}
+
+double CRWMeshGen3D::ShieldMesh_Normal(double current_radius)
+{
+	int number_of_rings = ceil((this->shield_distance - current_radius) / this->shield_density);
+	for (int i = 1; i < number_of_rings; i++)
+	{
+		double rad = current_radius + ((this->shield_distance - current_radius) / (double)number_of_rings) * (double)i;
+		this->rings.push_back(CRing(rad, this->shield_density));
+	}
+	current_radius = this->shield_distance;
+	this->rings.push_back(CRing(this->shield_distance, this->shield_density, true));
+
+	return current_radius;
+}
+
+double CRWMeshGen3D::ShieldMesh_LIN_Rvar_Dvar(double current_radius)
+{
+	double radius_delta = 0.0;
+	double current_density = this->horizontal_density;
+	double density_delta;
+	while(true)
+	{
+		density_delta = this->horizontal_density * this->coefficient;
+		double new_radius = current_radius + radius_delta + current_density + density_delta;
+		if (new_radius >= this->shield_distance)
+			break;
+
+		this->rings.push_back(CRing(new_radius, current_density + density_delta));
+		current_density += density_delta;
+		radius_delta += current_density;
+	}
+
+	// wyznaczenie gêstoœci punktó na pierœcieniu ekranu zewnêtrznego
+	double current_ring_dist = current_radius + radius_delta;
+	double next_ring_dist = current_radius + radius_delta + current_density;
+	double shield_dist = this->shield_distance;
+	/*
+	 next_ring_dist                                                   center of mesh's base
+	 |<----------------------------------------------------------------------x
+										   current_ring_dist
+										   |<--------------------------------x
+							shield_dist
+							|<-----------------------------------------------x
+	 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+	 BBBBBBBBBBBBBBBBBBBBBBBB
+
+	 corrected_shield_density = current_density(on current_ring_dist) x new ring's density x B/A
+	*/
+
+	next_ring_dist -= current_ring_dist;
+	shield_dist -= current_ring_dist;
+	double corrected_shield_density = current_density + density_delta * shield_dist / next_ring_dist;
+
+	current_radius = this->shield_distance;
+	this->rings.push_back(CRing(this->shield_distance, corrected_shield_density, true));
+	return current_radius;
+}
+
+
+
+double CRWMeshGen3D::ShieldMesh_LIN_Rconst_Dvar(double current_radius)
+{
+	int number_of_rings = ceil((this->shield_distance - current_radius) / this->shield_density);
+	for (int i = 1; i < number_of_rings; i++)
+	{
+		double relative_radius = ((this->shield_distance - current_radius) / (double)number_of_rings) * (double)i;
+		//double new_density = this->coefficient * pow(relative_radius, 2.0);
+		double new_density = relative_radius * this->coefficient;
+		this->rings.push_back(CRing(current_radius + relative_radius, new_density));
+	}
+	//double new_density = this->coefficient * pow(this->shield_density - current_radius, 2.0);
+	double new_density = (this->shield_distance - current_radius) * this->coefficient;
+	this->rings.push_back(CRing(this->shield_distance, new_density, true));
+	current_radius = this->outer_distance;
+
+	return current_radius;
+}
+
+double CRWMeshGen3D::ShieldMesh_EXP_Rconst_Dvar(double current_radius)
+{
+	int number_of_rings = ceil((this->shield_distance - current_radius) / this->shield_density);
+	for (int i = 1; i < number_of_rings; i++)
+	{
+		double relative_radius = ((this->shield_distance - current_radius) / (double)number_of_rings) * (double)i;
+		double new_density = this->coefficient * pow(relative_radius, this->exponent);
+		//double new_density = this->coefficient * pow((double)i, this->exponent);
+		//double new_density = this->coefficient * log(relative_radius);
+		this->rings.push_back(CRing(current_radius + relative_radius, new_density));
+	}
+	double new_density = this->coefficient * pow(this->shield_distance - current_radius, this->exponent);
+	//double new_density = this->coefficient * pow(number_of_rings, this->exponent);
+	//double new_density = this->coefficient * log(this->shield_distance - current_radius);
+	this->rings.push_back(CRing(this->shield_distance, new_density, true));
+	current_radius = this->outer_distance;
+
+	return current_radius;
+}
+
+double CRWMeshGen3D::ShieldMesh_EXP_Rvar_Dvar(double current_radius)
+{
+	// expotential meshing - different distances between rings
+	double relative_radius = this->horizontal_density;
+	double corrected_shield_density;
+	double bias = this->horizontal_density;
+	while(true)
+	{
+		double radius_delta = this->coefficient * pow(relative_radius, this->exponent) + this->horizontal_density;
+
+		if (current_radius + relative_radius + radius_delta  - bias> this->shield_distance)
+			break;
+
+		this->rings.push_back(CRing(current_radius + relative_radius + radius_delta - bias, radius_delta, false));
+		corrected_shield_density = radius_delta;
+		relative_radius += radius_delta;
+	}
+
+	corrected_shield_density = this->coefficient * pow(this->shield_distance - current_radius, this->exponent) + this->horizontal_density;
+	this->rings.push_back(CRing(this->shield_distance, corrected_shield_density, true));
+
+	current_radius = this->shield_distance;
+	return current_radius;
+}
+
+
+int CRWMeshGen3D::GetNode(int ring_number, int node_number)
+{
+	int node_id = this->nodes[ring_number][node_number % (this->nodes[ring_number].size())];
+	return node_id;
+}
+
+void CRWMeshGen3D::AddNode(int ring_number, double radius, double angle)
+{
+	CNode node(ring_number, radius, angle);
+
+	int id = this->plain_nodes.size();
+	this->plain_nodes.push_back(node);
+	this->nodes[ring_number].push_back(id);
+}
+
+void CRWMeshGen3D::SaveNodes(enum MeshSaveMode save_mode, const TCHAR * file_name)
+{
+		//this->SaveNodes(&node_list, SaveNodesXY, _T("m_nodes_xy.txt"));
+	//this->SaveNodes(&spatial_nodes, SaveNodesXYZ, _T("m_nodes_xyz.txt"));
+
+	FILE *node_file = _wfopen(file_name, _T("w+"));
+	if (node_file == NULL)
+		throw NativeExceptions::CFileIOException(file_name, errno, _T("Error creating node's files"));
+
+	setvbuf(node_file, NULL, _IOFBF, 1024 * 1024); 
+	if (save_mode == MeshSaveMode::SavePlainData)
+	{
+		std::vector<CNode>::iterator iter = this->plain_nodes.begin();
+		std::vector<CNode>::iterator end = this->plain_nodes.end();
+		fprintf(node_file, "%d\n", this->plain_nodes.size());
+		while (iter != end)
+		{
+			CNode * n = &*iter;
+			fprintf(node_file,  "%10.5f %10.5f\n", n->x, n->y);
+			iter++;
+		}
+	}
+	else
+	{
+		// MeshSaveMode::SaveSpatialData
+		std::vector<CNode>::iterator iter = this->spatial_nodes.begin();
+		std::vector<CNode>::iterator end = this->spatial_nodes.end();
+		fprintf(node_file, "%d\n", this->spatial_nodes.size());
+
+		while (iter != end)
+		{
+			CNode * n = &*iter;
+			fprintf(node_file,  "%10.5f %10.5f %10.5f\n", n->x, n->y, n->z);
+			iter++;
+		}
+	}
+
+	fflush(node_file);
+	fclose(node_file);
+}
+
+void CRWMeshGen3D::SaveSimplexes(std::vector<CElement3D> * elements, const TCHAR * file_name)
+{
+
+	FILE *simples_file = _wfopen(file_name,  _T("w+"));
+	setvbuf(simples_file, NULL, _IOFBF, 1024 * 1024); 
+	std::vector<CElement3D>::iterator iter = elements->begin();
+	fprintf(simples_file, "%d\n", elements->size());
+	while (iter != elements->end())
+	{
+		CElement3D * e = &*iter;
+		fprintf(simples_file,  "%5d %5d %5d %5d\n", e->node1 + 1, e->node2 + 1, e->node3 + 1, e->node4 + 1);
+		iter++;
+	}
+	fclose(simples_file);
+}
+
+void CRWMeshGen3D::SaveTriangles(std::vector<CElement2D> * elements, const TCHAR * file_name)
+{
+
+	FILE *simples_file = _wfopen(file_name, _T("w+"));
+	setvbuf(simples_file, NULL, _IOFBF, 1024 * 1024); 
+	std::vector<CElement2D>::iterator iter = elements->begin();
+	fprintf(simples_file, "%d\n", elements->size());
+	while (iter != elements->end())
+	{
+		CElement2D * e = &*iter;
+		fprintf(simples_file, "%5d %5d %5d\n", e->node1 + 1, e->node2 + 1, e->node3 + 1);
+		iter++;
+	}
+	fclose(simples_file);
+}
+
+void CRWMeshGen3D::ClearMesh(void)
+{
+	this->mesh_generated = false;
+	this->shield_active = false;
+	this->inner_active = false;
+
+	this->nodes.clear();
+	this->plain_nodes.clear();
+	this->spatial_nodes.clear();
+	this->plain_elements.clear();
+	this->rings.clear();
+}
+
+CRing * CRWMeshGen3D::GetNearestRing(const double position)
+{
+	if (this->rings.empty())
+		return NULL;
+	
+	std::vector<CRing>::iterator end = this->rings.end();
+	CRing * nearest = &this->rings[0];
+	for (std::vector<CRing>::iterator i = this->rings.begin(); i < end; i++)
+	{
+		if (abs((*i).radius - position) >= abs(nearest->radius - position))
+			continue;
+		nearest = &(*i);
+	}
+	
+	return nearest;
+}
